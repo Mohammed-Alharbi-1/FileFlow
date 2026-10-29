@@ -1,0 +1,41 @@
+name: Windows portable release review
+on:
+  workflow_dispatch:
+    inputs:
+      distribution_reviewed:
+        description: Confirm source licensing, exact binary compliance and native Windows tray validation have been reviewed
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  build:
+    if: ${{ inputs.distribution_reviewed }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m compileall -q fileflow tools tests
+      - run: python tools/publication.py
+      - run: python -m pytest -q --tb=short -k "not test_real_windows_process_exit_relaunch_and_singleton"
+      - run: python tools/verify_lifecycle.py lifecycle-ci.json --headless
+      - shell: pwsh
+        run: |
+          $version = (python -c "from fileflow import __version__; print(__version__)").Trim()
+          if ($env:GITHUB_REF_TYPE -ne 'tag' -or $env:GITHUB_REF_NAME -ne "v$version") { throw 'A matching version tag is required' }
+          ./build.ps1 -SkipTests -Python python -OutputDirectory dist/public-release
+          python tools/validate_portable.py dist/public-release/FileFlow --headless
+          python tools/verify_lifecycle.py lifecycle-exe.json --exe dist/public-release/FileFlow/FileFlow.exe --headless
+          python tools/package_public.py dist/public-release/FileFlow release-assets
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: portable-release-review
+          path: release-assets/*
+          if-no-files-found: error
